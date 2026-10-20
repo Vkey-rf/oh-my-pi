@@ -100,6 +100,12 @@ describe("vibe cards in the transcript", () => {
 		}
 	});
 
+	it("keeps a failed control-plane call visible", () => {
+		const component = build("vibe_kill", { session: "w01" });
+		component.updateResult({ content: [{ type: "text", text: "no such session" }], isError: true }, false);
+		expect(component.render(120).length).toBeGreaterThan(0);
+	});
+
 	it("leaves ordinary tool cards untouched", () => {
 		expect(rowsFor("read", { path: "package.json" }, { details: {} })).toBeGreaterThan(0);
 	});

@@ -1974,7 +1974,9 @@ export class ToolExecutionComponent extends Container {
 	 * near-identical wall frames pile up. The transcript therefore shows only
 	 * real events:
 	 * - `vibe_wait` that observed a settle (its card reports the settled turns);
-	 * - an explicit `vibe_list` roster.
+	 * - an explicit `vibe_list` roster;
+	 * - any vibe call that failed (a worker that refused a spawn or a kill must
+	 *   not fail silently).
 	 *
 	 * Everything else — the in-flight poll (its live state is the status line's
 	 * vibe chip), a wait that timed out with nothing settled, and the
@@ -1984,6 +1986,7 @@ export class ToolExecutionComponent extends Container {
 	#hidesVibeCard(): boolean {
 		const name = this.#toolName;
 		if (!isVibeToolName(name)) return false;
+		if (this.#result?.isError === true) return false;
 		if (name === "vibe_list") return false;
 		if (name !== "vibe_wait") return true;
 		// In flight: the poll is live status, not history.

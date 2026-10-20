@@ -128,8 +128,6 @@ export class VibeSendTool implements AgentTool<typeof vibeSendSchema, VibeToolDe
 	}
 }
 
-const WAIT_PROGRESS_INTERVAL_MS = 500;
-
 export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDetails> {
 	readonly name = "vibe_wait";
 	readonly approval = "read" as const;
@@ -155,28 +153,31 @@ export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDe
 		// Cards on the wall when the wait starts stay for its duration, so a
 		// worker killed mid-wait can't vanish from the frame that settles it.
 		const shown = new Set(wallOf(this.session, params.sessions).screens.map(screen => screen.id));
-		const emitProgress = (): void => {
+		const emitProgress = (snapshot?: { settled: VibeWaitOutcome["settled"]; stillRunning: string[] }): void => {
 			onUpdate?.({
 				content: [{ type: "text", text: "" }],
 				details: {
 					op: "wait",
 					...wallOf(this.session, params.sessions, shown),
-					wait: { settled: [], stillRunning: [], timedOut: false, waiting: true },
+					wait: {
+						settled: snapshot?.settled.map(({ id, jobId, status }) => ({ id, jobId, status })) ?? [],
+						stillRunning: snapshot?.stillRunning ?? [],
+						timedOut: false,
+						waiting: true,
+					},
 				},
 			});
 		};
-		const progressTimer = onUpdate ? setInterval(emitProgress, WAIT_PROGRESS_INTERVAL_MS) : undefined;
 		emitProgress();
-		let outcome: VibeWaitOutcome;
-		try {
-			outcome = await registry.wait(this.session, {
-				sessions: params.sessions,
-				timeoutMs: params.timeout !== undefined ? params.timeout * 1000 : undefined,
-				signal,
-			});
-		} finally {
-			clearInterval(progressTimer);
-		}
+		// The registry owns the wait's cadence: it re-reads the entry snapshot's
+		// jobs so settled turns surface live (status chip) instead of only in the
+		// final result.
+		const outcome: VibeWaitOutcome = await registry.wait(this.session, {
+			sessions: params.sessions,
+			timeoutMs: params.timeout !== undefined ? params.timeout * 1000 : undefined,
+			signal,
+			onProgress: emitProgress,
+		});
 		// A worker that died as its turn settled keeps its card for the settled footer.
 		for (const entry of outcome.settled) shown.add(entry.id);
 		const details: VibeToolDetails = {

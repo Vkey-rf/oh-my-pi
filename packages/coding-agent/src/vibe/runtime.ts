@@ -83,6 +83,8 @@ const TURN_TRACE_CAP = 40;
 const TRACE_LINE_MAX = 120;
 /** Default `vibe_wait` window when no timeout was given (ms). */
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
+/** Cadence of the live `wait` progress frames that feed the status line's vibe chip (ms). */
+const WAIT_PROGRESS_INTERVAL_MS = 500;
 /** Response text cap inside a delivered turn result; full output stays at agent://<id>. */
 const RESPONSE_PREVIEW_MAX = 6000;
 /** Grace period for Vibe cancellation/release cleanup before teardown detaches (ms). */
@@ -933,7 +935,18 @@ export class VibeSessionRegistry {
 	 */
 	async wait(
 		session: ToolSession,
-		args: { sessions?: string[]; timeoutMs?: number; signal?: AbortSignal },
+		args: {
+			sessions?: string[];
+			timeoutMs?: number;
+			signal?: AbortSignal;
+			/**
+			 * Called while the wait blocks (immediately, then every
+			 * {@link WAIT_PROGRESS_INTERVAL_MS}) with the live settled/in-flight
+			 * split, so the caller can stream progress frames without re-deriving
+			 * the entry snapshot. Not called when nothing was waiting.
+			 */
+			onProgress?: (snapshot: { settled: VibeWaitOutcome["settled"]; stillRunning: string[] }) => void;
+		},
 	): Promise<VibeWaitOutcome> {
 		const scope = this.ownerScope(session);
 		const manager = this.#manager(session);
@@ -983,6 +996,16 @@ export class VibeSessionRegistry {
 			manager.watchJobs(watchedJobIds);
 			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<"timeout">();
 			const timeoutHandle = setTimeout(() => timeoutResolve("timeout"), timeoutMs);
+			// Live split for the caller's progress frames: the entry snapshot decides
+			// which turns this wait reports, so settled jobs surface as they land.
+			const emitProgress = (): void => {
+				args.onProgress?.({
+					settled: collectSettled(),
+					stillRunning: watched.filter(record => record.turn !== undefined).map(record => record.id),
+				});
+			};
+			emitProgress();
+			const progressHandle = args.onProgress ? setInterval(emitProgress, WAIT_PROGRESS_INTERVAL_MS) : undefined;
 			const racePromises: Array<Promise<"settled" | "timeout" | "aborted">> = [
 				...runningJobs.map(job => job.promise.then(() => "settled" as const)),
 				timeoutPromise,
@@ -1002,6 +1025,7 @@ export class VibeSessionRegistry {
 			try {
 				waitEndedByTimeout = (await Promise.race(racePromises)) === "timeout";
 			} finally {
+				clearInterval(progressHandle);
 				manager.unwatchJobs(watchedJobIds);
 				clearTimeout(timeoutHandle);
 				abortCleanup?.();

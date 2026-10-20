@@ -746,6 +746,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
+	#vibeWaitStatus: SegmentContext["vibeWait"] = null;
 	#vimStatus: SegmentContext["vim"] = null;
 	/**
 	 * Injected aggregator that returns the aggregate tok/s of this session's
@@ -1173,6 +1174,26 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const next = status ?? null;
 		if (this.#vibeModeStatus === next || this.#vibeModeStatus?.enabled === next?.enabled) return;
 		this.#vibeModeStatus = next;
+		this.#invalidateStatusLineRenderCache();
+	}
+
+	/**
+	 * Publish the in-flight `vibe_wait` poll for the vibe chip, or `undefined`
+	 * when the wait returns. The poll never enters the transcript: this fixed
+	 * one-line slot is where it updates in place. Interactive mode's event
+	 * controller pushes every progress frame (~500 ms) and clears on completion.
+	 */
+	setVibeWaitStatus(status: SegmentContext["vibeWait"] | undefined): void {
+		const next = status ?? null;
+		if (
+			this.#vibeWaitStatus === next ||
+			(this.#vibeWaitStatus?.onAir === next?.onAir &&
+				this.#vibeWaitStatus?.settled === next?.settled &&
+				this.#vibeWaitStatus?.elapsedMs === next?.elapsedMs)
+		) {
+			return;
+		}
+		this.#vibeWaitStatus = next;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -2614,6 +2635,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			goalMode: this.#goalModeStatus,
 			goalStatusInFooter: this.#goalModeStatus ? this.host.goalStatusInFooter(this.session) : false,
 			vibeMode: this.#vibeModeStatus,
+			vibeWait: this.#vibeWaitStatus,
 			vim: this.#vimStatus,
 			collab: this.#collabStatus,
 			stream: this.#streamStatus,

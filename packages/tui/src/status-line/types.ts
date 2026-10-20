@@ -113,6 +113,19 @@ export interface SegmentContext {
 	vibeMode: {
 		enabled: boolean;
 	} | null;
+	/**
+	 * In-flight `vibe_wait` poll, or null when no wait is running. The director's
+	 * poll loop is live status, never transcript content: the status line shows
+	 * this in place and the transcript gains no rows for it.
+	 */
+	vibeWait?: {
+		/** Workers with a turn in flight right now. */
+		onAir: number;
+		/** Turns observed settling while this wait has been blocked. */
+		settled: number;
+		/** How long this wait has been blocked. */
+		elapsedMs: number;
+	} | null;
 	/** Modal editing state, or null when `tui.vimMode` is off. */
 	vim: {
 		mode: "insert" | "normal" | "visual" | "visual-line" | "replace";

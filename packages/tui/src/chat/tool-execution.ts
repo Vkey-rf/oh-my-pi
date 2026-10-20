@@ -985,9 +985,9 @@ export class ToolExecutionComponent extends Container {
 	 * mounted so toggling it is one prop change.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
-		// Vibe tools never draw a card (wall, composer, roster): their calls and
-		// results stay in the model's context, the transcript shows no rows.
-		if (isVibeToolName(this.#toolName)) return EMPTY_NODE;
+		// Vibe control-plane calls draw no card; only a real event does (see
+		// `#hidesVibeCard`). The status line carries the in-flight poll.
+		if (this.#hidesVibeCard()) return EMPTY_NODE;
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
 		const media = cx?.supports("media") === true;
@@ -1344,9 +1344,9 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		// Vibe tools render nothing (see `isVibeToolName`); the component stays
-		// mounted so poll displacement and pending-tool bookkeeping still work.
-		if (isVibeToolName(this.#toolName)) return [];
+		// Control-plane vibe calls render nothing (see `#hidesVibeCard`); the
+		// component stays mounted so pending-tool bookkeeping still works.
+		if (this.#hidesVibeCard()) return [];
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
@@ -1963,6 +1963,33 @@ export class ToolExecutionComponent extends Container {
 			| undefined;
 		if (details?.source !== "interrupt_skipped") return false;
 		return details.__synthetic === true || (details.__interrupted === true && details.execution === "started");
+	}
+
+	/**
+	 * Whether this card draws no transcript rows.
+	 *
+	 * Vibe tools are the director's control plane, not history: a poll loop
+	 * would append a block per `vibe_wait`, and a block that has retired to
+	 * scrollback can never be replaced (see {@link isDisplaceableBlock}), so
+	 * near-identical wall frames pile up. The transcript therefore shows only
+	 * real events:
+	 * - `vibe_wait` that observed a settle (its card reports the settled turns);
+	 * - an explicit `vibe_list` roster.
+	 *
+	 * Everything else — the in-flight poll (its live state is the status line's
+	 * vibe chip), a wait that timed out with nothing settled, and the
+	 * spawn/send/kill receipts — renders zero rows. Calls, results and the
+	 * model's context are untouched.
+	 */
+	#hidesVibeCard(): boolean {
+		const name = this.#toolName;
+		if (!isVibeToolName(name)) return false;
+		if (name === "vibe_list") return false;
+		if (name !== "vibe_wait") return true;
+		// In flight: the poll is live status, not history.
+		if (this.#isPartial || this.#result === undefined) return true;
+		const wait = (this.#result.details as { wait?: { settled?: readonly unknown[] } } | undefined)?.wait;
+		return (wait?.settled?.length ?? 0) === 0;
 	}
 
 	/**

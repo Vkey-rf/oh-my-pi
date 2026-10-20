@@ -205,6 +205,14 @@ export class EventController {
 	#blockingPrompts = new Map<string, RunStatus>();
 	#approvalPreviewGates = new Map<string, ApprovalPreviewGate>();
 	#pendingStreamPreviews = new Map<string, unknown>();
+	/**
+	 * In-flight `vibe_wait` poll mirrored into the status line's vibe chip.
+	 * The poll itself is live status, never transcript history: the card is
+	 * suppressed while it runs and the chip carries `2 on air · 1 settled · 12s`,
+	 * updated in place from every progress frame (~500 ms) and cleared when the
+	 * call returns. Directories: `ToolExecutionComponent#hidesVibeCard`.
+	 */
+	#vibeWait: { toolCallId: string; startedAt: number; onAir: number; settled: number } | undefined;
 	#detachToolApprovalPreviewWaiter: (() => void) | undefined;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
@@ -1887,6 +1895,7 @@ export class EventController {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		const tool = this.ctx.viewSession.getToolByName(event.toolName);
 		const renderToolName = toolRenderName(event.toolName, tool);
+		if (renderToolName === "vibe_wait") this.#beginVibeWait(event.toolCallId);
 		const blocked = this.#blockingPrompt(renderToolName, event.args);
 		if (blocked) {
 			this.#blockingPrompts.set(event.toolCallId, blocked);
@@ -2007,6 +2016,7 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>,
 	): Promise<void> {
 		this.#ensureWorkingLoaderWhileStreaming();
+		if (event.toolName === "vibe_wait") this.#applyVibeWaitFrame(event);
 		const component = this.ctx.pendingTools.get(event.toolCallId);
 		if (component) {
 			const isFinalAsyncState = isSettledJobFrame(event.partialResult.details);
@@ -2027,6 +2037,47 @@ export class EventController {
 			}
 			this.ctx.ui.requestRender();
 		}
+	}
+
+	/** Open the live `vibe_wait` chip: the poll's card is suppressed, this is its surface. */
+	#beginVibeWait(toolCallId: string): void {
+		this.#vibeWait = { toolCallId, startedAt: performance.now(), onAir: 0, settled: 0 };
+		this.#publishVibeWait();
+	}
+
+	/**
+	 * Fold one progress frame into the chip. The frame's wall snapshot names the
+	 * sessions still on air; its `wait.settled` list grows as watched turns land,
+	 * so the chip's counts are the call's own truth, not a re-derivation.
+	 */
+	#applyVibeWaitFrame(event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>): void {
+		const wait = this.#vibeWait;
+		if (!wait || wait.toolCallId !== event.toolCallId) return;
+		const details = event.partialResult.details as
+			| { screens?: Array<{ state?: string }>; wait?: { settled?: readonly unknown[] } }
+			| undefined;
+		const screens = details?.screens ?? [];
+		wait.onAir = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
+		wait.settled = details?.wait?.settled?.length ?? 0;
+		this.#publishVibeWait();
+	}
+
+	/** Clear the chip, optionally only when it belongs to `toolCallId`. */
+	#clearVibeWait(toolCallId?: string): void {
+		if (!this.#vibeWait) return;
+		if (toolCallId !== undefined && this.#vibeWait.toolCallId !== toolCallId) return;
+		this.#vibeWait = undefined;
+		this.ctx.statusLine.setVibeWaitStatus(undefined);
+	}
+
+	#publishVibeWait(): void {
+		const wait = this.#vibeWait;
+		if (!wait) return;
+		this.ctx.statusLine.setVibeWaitStatus({
+			onAir: wait.onAir,
+			settled: wait.settled,
+			elapsedMs: performance.now() - wait.startedAt,
+		});
 	}
 
 	#settleHeldCompletionIfPresent(toolCallId: string, component: ToolExecutionHandle): void {
@@ -2098,6 +2149,8 @@ export class EventController {
 	}
 
 	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
+		// The poll is over: its live chip goes away before any early return below.
+		if (event.toolName === "vibe_wait") this.#clearVibeWait(event.toolCallId);
 		// `createAbortedToolResult` emits start/end after an error/aborted
 		// assistant message. The matching card was deliberately retracted at
 		// message_end; consume the completion instead of recreating/updating UI.
@@ -2268,6 +2321,10 @@ export class EventController {
 		}
 	}
 	async #handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		// Safety net: a turn that ends without a matching `tool_execution_end`
+		// (aborted run) must not leave the vibe chip frozen. A still-running wait
+		// re-asserts it on its next 500 ms progress frame.
+		this.#clearVibeWait();
 		// A superseded agent_end: the agent is already streaming a fresh turn, so
 		// this event belongs to a turn that has already been replaced. The session
 		// dispatches to listeners fire-and-forget across an async extension-emit hop

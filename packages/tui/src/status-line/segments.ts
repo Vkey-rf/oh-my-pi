@@ -496,11 +496,33 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
+/** Whole-second wait clock for the vibe chip: `12s`, `1m12s`, `1h05m`. */
+function waitElapsedLabel(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000));
+	if (total < 60) return `${total}s`;
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	if (minutes < 60) return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`;
+	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * Facts the vibe chip appends while a `vibe_wait` poll is blocked
+ * (`2 on air · 1 settled · 12s`). The poll is live status, never a transcript
+ * row: this is the only surface that carries it.
+ */
+function vibeWaitFacts(wait: NonNullable<SegmentContext["vibeWait"]>): string[] {
+	const facts: string[] = [];
+	if (wait.onAir > 0) facts.push(`${wait.onAir} on air`);
+	if (wait.settled > 0) facts.push(`${wait.settled} settled`);
+	facts.push(waitElapsedLabel(wait.elapsedMs));
+	return facts;
+}
+
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
 		const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : " (paused)";
-
 		const plan = ctx.planMode;
 		if (plan && (plan.enabled || plan.paused)) {
 			const label = plan.paused ? `Plan${pauseSuffix}` : "Plan";
@@ -525,7 +547,9 @@ const modeSegment: StatusLineSegment = {
 		const vibe = ctx.vibeMode;
 		if (vibe?.enabled) {
 			const content = withIcon(theme.icon.agents, "Vibe");
-			return { content: accentFg(ctx, "accent", content), visible: true };
+			const facts = ctx.vibeWait ? vibeWaitFacts(ctx.vibeWait) : [];
+			const label = facts.length > 0 ? `${content} ${theme.sep.dot} ${facts.join(` ${theme.sep.dot} `)}` : content;
+			return { content: accentFg(ctx, "accent", label), visible: true };
 		}
 
 		const loop = ctx.loopMode;
@@ -555,7 +579,11 @@ const modeSegment: StatusLineSegment = {
 		if (ctx.prewalk?.enabled) return segView([span("Prewalk", accentToken(ctx, "accent"))], "prewalk");
 		const goal = ctx.goalMode;
 		if (goal && (goal.enabled || goal.paused)) return describeGoalMode(ctx, goal);
-		if (ctx.vibeMode?.enabled) return segView([span("Vibe", accentToken(ctx, "accent"))], "agents");
+		if (ctx.vibeMode?.enabled) {
+			const facts = ctx.vibeWait ? vibeWaitFacts(ctx.vibeWait) : [];
+			const label = facts.length > 0 ? `Vibe · ${facts.join(" · ")}` : "Vibe";
+			return segView([span(label, accentToken(ctx, "accent"))], "agents");
+		}
 		const loop = ctx.loopMode;
 		if (loop) {
 			const paused = loop.state === "paused";

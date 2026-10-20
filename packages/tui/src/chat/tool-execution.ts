@@ -40,6 +40,7 @@ import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
 import { isWaitingPollDetails } from "../tools/wait";
+import { isWaitingVibeWallDetails } from "../tools/vibe";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatStatusIcon,
@@ -58,7 +59,13 @@ import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-contai
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
 	return tool?.name ?? wireName;
 }
-type DisplaceableToolName = "wait" | "todo";
+type DisplaceableToolName = "wait" | "vibe_wait" | "todo";
+type PollDisplaceableToolName = Exclude<DisplaceableToolName, "todo">;
+
+/** Poll tools whose still-watching snapshot is superseded by the next call of the same tool. */
+export function isPollDisplaceableToolName(toolName: string): toolName is PollDisplaceableToolName {
+	return toolName === "wait" || toolName === "vibe_wait";
+}
 
 function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 	return (
@@ -91,6 +98,7 @@ function displaceableToolName(
 ): DisplaceableToolName | undefined {
 	if (result.isError === true) return undefined;
 	if (toolName === "wait" && isWaitingPollDetails(result.details)) return "wait";
+	if (toolName === "vibe_wait" && isWaitingVibeWallDetails(result.details)) return "vibe_wait";
 	if (toolName === "todo" && !isPartial && isTodoToolDetails(result.details)) return "todo";
 	return undefined;
 }
@@ -446,8 +454,9 @@ export class ToolExecutionComponent extends Container {
 	// late result can update its streaming preview.
 	#sealed = false;
 	// Tool result snapshots that may be superseded by a later same-tool call
-	// while still in the mutable viewport. `wait` uses this for repeated all-running polls; `todo` uses
-	// it for per-turn state snapshots so only the latest list remains visible.
+	// while still in the mutable viewport. `wait`/`vibe_wait` use this for
+	// repeated all-running polls; `todo` uses it for per-turn state snapshots
+	// so only the latest list remains visible.
 	#displaceableByToolName: DisplaceableToolName | undefined;
 	// Execution start on the presentation clock (performance.now domain, the
 	// same domain as AnimationFrame.now supplied by the transcript allocator).
@@ -753,7 +762,9 @@ export class ToolExecutionComponent extends Container {
 			(pendingCallConsumesSpinner || partialResultConsumesSpinner);
 		// TSP terminals clock spinners themselves; the frame counter is ANSI-only.
 		const needsSpinner =
-			!isNativeRendering() && (isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "wait");
+			!this.#hiddenVibeWaitFrame() &&
+			!isNativeRendering() &&
+			(isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "wait");
 		if (needsSpinner && !this.#spinnerActive) {
 			const frameCount = theme.spinnerFrames.length;
 			const frame = sharedSpinnerFrame(frameCount);
@@ -828,6 +839,24 @@ export class ToolExecutionComponent extends Container {
 	/** Whether the result's figure still waits for its raster; the transcript holds retirement meanwhile. */
 	isTranscriptBlockPending(): boolean {
 		return this.#toolActivityVisible && this.#figure?.pending === true;
+	}
+
+	/**
+	 * A `vibe_wait` frame is hidden unless the wait observed a settled turn.
+	 * Progress snapshots (500 ms ticks) and a finished poll that only saw turns
+	 * still running are status, not transcript content: drawing either paints a
+	 * near-identical wall per frame or poll, and once rows reach native
+	 * scrollback each later frame appends instead of updating. Only a wait with
+	 * `settled.length > 0` marks an event worth a card; `vibe_list` keeps its
+	 * roster frame.
+	 */
+	#hiddenVibeWaitFrame(): boolean {
+		if (this.#toolName !== "vibe_wait") return false;
+		const details = this.#result?.details;
+		if (!isRecord(details) || details.op !== "wait") return false;
+		const wait = details.wait;
+		if (!isRecord(wait) || wait.waiting === true) return true;
+		return !Array.isArray(wait.settled) || wait.settled.length === 0;
 	}
 
 	/**
@@ -982,6 +1011,7 @@ export class ToolExecutionComponent extends Container {
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
+		if (this.#hiddenVibeWaitFrame()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
 		const media = cx?.supports("media") === true;
 		const key = [
@@ -1337,7 +1367,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
+		if (
+			!this.#toolActivityVisible ||
+			this.#allocation === 0 ||
+			(this.#toolName === "wait" && this.#isBenignSkip()) ||
+			this.#hiddenVibeWaitFrame()
+		) {
 			return [];
 		}
 		let lines = super.render(width);

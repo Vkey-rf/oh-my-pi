@@ -21,6 +21,7 @@ import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	asyncJobState,
+	isPollDisplaceableToolName,
 	isSettledJobFrame,
 	parksAsBackground,
 	settleWithJobFrame,
@@ -282,10 +283,11 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
-	// Most recent `wait` tool block whose result still had every watched job
-	// running. Kept un-finalized (live) so the next `wait` call displaces it —
-	// one persistent poll instead of a stack of "waiting on N jobs" frames —
-	// and sealed in place the moment anything else lands below it.
+	// Most recent `wait`/`vibe_wait` tool block whose result still had every
+	// watched job/turn running. Kept un-finalized (live) so the next call of the
+	// same tool displaces it — one persistent poll instead of a stack of
+	// "waiting on N jobs" frames — and sealed in place the moment anything else
+	// lands below it.
 	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
 	// Most recent successful `todo` snapshot in the active turn. It stays live
 	// across intervening tool output so a later `todo` update can replace the
@@ -1343,22 +1345,18 @@ export class EventController {
 
 	/**
 	 * Resolve the pending displaceable poll block before the next block lands.
-	 * A follow-up `wait` call displaces it — the stale "waiting on N jobs" frame
-	 * is removed so repeated polls read as one persistent poll — while anything
-	 * else seals it in place as final history. Removal is gated on none of the
-	 * block's rows having entered native scrollback: rows already on the tape
-	 * are immutable visual history, so a scrolled-off poll seals instead of
-	 * being retracted.
+	 * A follow-up `wait`/`vibe_wait` call displaces it — the stale
+	 * "waiting on N jobs" frame is removed so repeated polls read as one
+	 * persistent poll — while anything else seals it in place as final history.
+	 * Removal is gated on none of the block's rows having entered native
+	 * scrollback: rows already on the tape are immutable visual history, so a
+	 * scrolled-off poll seals instead of being retracted.
 	 */
 	#resolveDisplaceablePoll(nextToolName?: string): void {
 		const previous = this.#displaceablePollComponent;
 		if (!previous) return;
 		this.#displaceablePollComponent = undefined;
-		if (
-			nextToolName === "wait" &&
-			previous.isDisplaceableBlock() &&
-			this.ctx.chatContainer.canDisplaceBlock(previous)
-		) {
+		if (previous.canBeDisplacedBy(nextToolName) && this.ctx.chatContainer.canDisplaceBlock(previous)) {
 			this.ctx.chatContainer.removeChild(previous);
 		}
 		// Sealing stops the waiting-poll spinner and freezes the block (for a
@@ -2168,8 +2166,8 @@ export class EventController {
 			if (component) {
 				this.#applyToolCompletion(component, event);
 				if (component instanceof ToolExecutionComponent && component.isDisplaceableBlock()) {
-					if (event.toolName === "wait" && component.canBeDisplacedBy("wait")) {
-						// Remember the waiting poll so the next `wait` call can displace it.
+					if (isPollDisplaceableToolName(event.toolName) && component.canBeDisplacedBy(event.toolName)) {
+						// Remember the waiting poll so the next `wait`/`vibe_wait` call can displace it.
 						this.#displaceablePollComponent = component;
 					} else if (event.toolName === "todo" && component.canBeDisplacedBy("todo")) {
 						// Successful todo update supersedes the prior live snapshot. A failed

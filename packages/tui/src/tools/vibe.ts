@@ -24,6 +24,19 @@ import type { NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResul
 /** Operation represented by a worker-session tool result. */
 export type VibeOp = "spawn" | "send" | "wait" | "kill" | "list";
 
+/**
+ * Whether a vibe wall is a still-watching poll: a `wait` result with no settled
+ * turn and at least one turn still in flight. Only those walls may be retracted
+ * by the next `vibe_wait`; a wall that observed a settle is real history.
+ */
+export function isWaitingVibeWallDetails(details: unknown): boolean {
+	if (typeof details !== "object" || details === null) return false;
+	const d = details as Partial<VibeToolDetails>;
+	if (d.op !== "wait" || !d.wait) return false;
+	if (!Array.isArray(d.wait.settled) || !Array.isArray(d.wait.stillRunning)) return false;
+	return d.wait.settled.length === 0 && d.wait.stillRunning.length > 0;
+}
+
 /** Details payload shared by every vibe tool for TUI rendering. */
 export interface VibeToolDetails {
 	op: VibeOp;

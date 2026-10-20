@@ -42,6 +42,7 @@ import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-too
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import {
+	isPollDisplaceableToolName,
 	isSettledJobFrame,
 	parksAsBackground,
 	settleWithJobFrame,
@@ -561,11 +562,7 @@ export class UiHelpers {
 			const previous = waitingPoll;
 			if (!previous) return;
 			waitingPoll = null;
-			if (
-				nextToolName === "wait" &&
-				previous.isDisplaceableBlock() &&
-				this.ctx.chatContainer.canDisplaceBlock(previous)
-			) {
+			if (previous.canBeDisplacedBy(nextToolName) && this.ctx.chatContainer.canDisplaceBlock(previous)) {
 				this.ctx.chatContainer.removeChild(previous);
 			}
 			// Sealing finalizes the block and stops the waiting-poll spinner that
@@ -848,7 +845,7 @@ export class UiHelpers {
 					} else {
 						this.ctx.pendingTools.delete(message.toolCallId);
 						if (
-							message.toolName === "wait" &&
+							isPollDisplaceableToolName(message.toolName) &&
 							component instanceof ToolExecutionComponent &&
 							component.isDisplaceableBlock()
 						) {

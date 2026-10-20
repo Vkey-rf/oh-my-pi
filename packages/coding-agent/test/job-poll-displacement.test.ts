@@ -17,6 +17,7 @@ import { ToolExecutionComponent, type ToolExecutionHandle } from "@oh-my-pi/pi-t
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { cfgDisplayShowTokenUsage } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import { EMPTY_NODE } from "@oh-my-pi/pi-tui/native/describe";
 import { createUsageRowBlock } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -42,6 +43,42 @@ function pollResult(statuses: JobStatus[], extra: { cancelled?: boolean; isError
 				durationMs: 1_000,
 			})),
 			...(extra.cancelled ? { cancelled: [{ id: "j0", status: "cancelled" as const }] } : {}),
+		},
+	};
+}
+
+/** A vibe_wait result: `wait` frames the TV wall, and only an empty `settled` list is a still-watching poll. */
+function vibeWallResult(
+	wait: {
+		settled?: Array<{ id: string; jobId: string; status: "completed" | "failed" | "cancelled" }>;
+		stillRunning?: string[];
+		waiting?: boolean;
+	} = {},
+	screen: { turns?: number; lastIntent?: string } = {},
+) {
+	return {
+		content: [{ type: "text" as const, text: "" }],
+		details: {
+			op: "wait" as const,
+			screens: [
+				{
+					id: "worker",
+					cli: "good" as const,
+					state: "running" as const,
+					turns: screen.turns ?? 1,
+					queued: 0,
+					trace: [] as string[],
+					outputTail: [] as string[],
+					...(screen.lastIntent !== undefined ? { lastIntent: screen.lastIntent } : {}),
+					lastActivityAt: 0,
+				},
+			],
+			wait: {
+				settled: wait.settled ?? [],
+				stillRunning: wait.stillRunning ?? ["worker"],
+				timedOut: false,
+				...(wait.waiting === true ? { waiting: true } : {}),
+			},
 		},
 	};
 }
@@ -145,6 +182,43 @@ describe("wait block lifecycle", () => {
 		component.updateResult(pollResult(["running"]), false);
 		expect(component.isDisplaceableBlock()).toBe(false);
 	});
+
+	it("keeps a still-watching vibe wall displaceable and finalizes a settled one", () => {
+		const waiting = trackComponent(created, new ToolExecutionComponent("vibe_wait", {}, {}, undefined, uiStub));
+		waiting.updateResult(vibeWallResult(), false);
+		expect(waiting.isDisplaceableBlock()).toBe(true);
+		expect(waiting.isTranscriptBlockFinalized()).toBe(true);
+
+		const settled = trackComponent(created, new ToolExecutionComponent("vibe_wait", {}, {}, undefined, uiStub));
+		settled.updateResult(
+			vibeWallResult({ settled: [{ id: "worker", jobId: "job-7", status: "completed" }], stillRunning: [] }),
+			false,
+		);
+		expect(settled.isDisplaceableBlock()).toBe(false);
+	});
+
+	it("renders nothing for unresolved vibe waits, and one card when a turn settles", () => {
+		const wall = trackComponent(created, new ToolExecutionComponent("vibe_wait", {}, {}, undefined, uiStub));
+		for (let tick = 1; tick <= 15; tick++) {
+			wall.updateResult(vibeWallResult({ waiting: true }, { turns: tick, lastIntent: `tick ${tick}` }), true);
+			// A progress frame draws no rows: a growing live wall is what scrollback
+			// retirement used to turn into one appended copy per tick.
+			expect(wall.render(120)).toEqual([]);
+			expect(wall.describe()).toBe(EMPTY_NODE);
+		}
+
+		// A finished poll that only saw turns still running is status, not history.
+		wall.updateResult(vibeWallResult(), false);
+		expect(wall.render(120)).toEqual([]);
+		expect(wall.describe()).toBe(EMPTY_NODE);
+
+		wall.updateResult(
+			vibeWallResult({ settled: [{ id: "worker", jobId: "job-7", status: "completed" }], stillRunning: [] }),
+			false,
+		);
+		expect(Bun.stripANSI(wall.render(120).join("\n"))).toContain("worker");
+		expect(wall.isTranscriptBlockFinalized()).toBe(true);
+	});
 });
 
 describe("EventController displaces consecutive waiting polls", () => {
@@ -183,6 +257,30 @@ describe("EventController displaces consecutive waiting polls", () => {
 			toolCallId,
 			toolName: "wait",
 			result: pollResult(["running", "running"]),
+			isError: false,
+		});
+		return component;
+	}
+
+	async function runVibePoll(
+		controller: EventController,
+		children: Component[],
+		toolCallId: string,
+		result = vibeWallResult(),
+	) {
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "vibe_wait",
+			args: {},
+		});
+		const component = children[children.length - 1] as ToolExecutionComponent;
+		trackComponent(created, component);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId,
+			toolName: "vibe_wait",
+			result,
 			isError: false,
 		});
 		return component;
@@ -399,6 +497,100 @@ describe("EventController displaces consecutive waiting polls", () => {
 		expect(children).toContain(settled);
 		expect(children).toContain(next);
 	});
+
+	it("removes the previous vibe wall when the next vibe_wait starts", async () => {
+		const { controller, children } = createFixture();
+
+		const first = await runVibePoll(controller, children, "v1");
+		expect(children).toContain(first);
+		expect(first.isDisplaceableBlock()).toBe(true);
+
+		const second = await runVibePoll(controller, children, "v2");
+
+		// The stale wall frame is gone; only the fresh wall remains.
+		expect(children).not.toContain(first);
+		expect(children).toContain(second);
+		expect(first.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("keeps a vibe wall that observed a settled turn beside the next poll", async () => {
+		const { controller, children } = createFixture();
+		const settled = await runVibePoll(
+			controller,
+			children,
+			"v1",
+			vibeWallResult({ settled: [{ id: "worker", jobId: "job-7", status: "completed" }], stillRunning: [] }),
+		);
+
+		const next = await runVibePoll(controller, children, "v2");
+
+		// A wall that settled a turn is real history, not a supersedable poll.
+		expect(children).toContain(settled);
+		expect(children).toContain(next);
+	});
+
+	it("keeps one quiet card across intra-call vibe progress frames", async () => {
+		const { controller, children } = createFixture();
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "v1",
+			toolName: "vibe_wait",
+			args: {},
+		});
+		const wall = children[children.length - 1] as ToolExecutionComponent;
+		trackComponent(created, wall);
+
+		for (let tick = 1; tick <= 15; tick++) {
+			await controller.handleEvent({
+				type: "tool_execution_update",
+				toolCallId: "v1",
+				toolName: "vibe_wait",
+				args: {},
+				partialResult: vibeWallResult({ waiting: true }, { turns: tick, lastIntent: `tick ${tick}` }),
+			});
+			// Progress frames add no block and draw no rows; the poll's card stays
+			// quiet until a wait observes a settle.
+			expect(children).toHaveLength(1);
+			expect(children[0]).toBe(wall);
+			expect(wall.render(120)).toEqual([]);
+		}
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "v1",
+			toolName: "vibe_wait",
+			result: vibeWallResult(),
+			isError: false,
+		});
+		expect(children).toHaveLength(1);
+		// The finished poll saw no settle either, so its card still draws nothing.
+		expect(wall.render(120)).toEqual([]);
+		expect(wall.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("renders no blocks for completed polls that never settle", async () => {
+		const { controller, children } = createFixture();
+		for (let index = 1; index <= 5; index++) await runVibePoll(controller, children, `v${index}`);
+		expect(children.filter(child => child.render(120).length > 0)).toHaveLength(0);
+	});
+
+	it("paints a wall only for waits that observed a settle", async () => {
+		const { controller, children } = createFixture();
+		const settledFrame = () =>
+			vibeWallResult({ settled: [{ id: "worker", jobId: "job-7", status: "completed" }], stillRunning: [] });
+
+		const first = await runVibePoll(controller, children, "v1", settledFrame());
+		expect(first.render(120).length).toBeGreaterThan(0);
+		expect(children.filter(child => child.render(120).length > 0)).toHaveLength(1);
+
+		// An unresolved poll between settled waits adds no visible block.
+		await runVibePoll(controller, children, "v2");
+		expect(children.filter(child => child.render(120).length > 0)).toHaveLength(1);
+
+		const second = await runVibePoll(controller, children, "v3", settledFrame());
+		expect(second.render(120).length).toBeGreaterThan(0);
+		expect(children.filter(child => child.render(120).length > 0)).toHaveLength(2);
+	});
 });
 
 describe("#12248 completed wait turn replay", () => {
@@ -594,5 +786,121 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		expect(inheritDisplaceableTodo).toHaveBeenCalledWith(todos[0]);
 		expect(todos[0].canBeDisplacedBy("todo")).toBe(true);
 		expect(todos[0].isTranscriptBlockFinalized()).toBe(true);
+	});
+});
+
+describe("UiHelpers.renderSessionContext collapses repeated vibe walls", () => {
+	beforeAll(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		await initTheme();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		resetSettingsForTest();
+	});
+
+	it("renders no wall for a 14-poll session that never settles", () => {
+		const ctx = createInteractiveModeContext();
+		const chatContainer = ctx.chatContainer;
+		const helpers = new UiHelpers(ctx);
+		ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
+
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const callIds = Array.from({ length: 14 }, (_, i) => `v${i + 1}`);
+		// Each poll is its own assistant turn + tool result, like a real vibe session.
+		const messages = callIds.flatMap(
+			id =>
+				[
+					{
+						role: "assistant",
+						content: [{ type: "toolCall", id, name: "vibe_wait", arguments: {} }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "claude-sonnet-4-5",
+						stopReason: "stop",
+						usage,
+						timestamp: Date.now(),
+					},
+					{
+						role: "toolResult",
+						toolCallId: id,
+						toolName: "vibe_wait",
+						...vibeWallResult(),
+						isError: false,
+						timestamp: Date.now(),
+					},
+				] as unknown as AgentMessage[],
+		);
+
+		helpers.renderSessionContext({ messages } as SessionContext);
+
+		const walls = chatContainer.children.filter(
+			(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
+		);
+		// No poll observed a settle, so none of them is transcript content.
+		expect(walls.filter(wall => wall.render(120).length > 0)).toHaveLength(0);
+	});
+
+	it("replays exactly one wall for the wait that observed a settle", () => {
+		const ctx = createInteractiveModeContext();
+		const chatContainer = ctx.chatContainer;
+		const helpers = new UiHelpers(ctx);
+		ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
+
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const results = [
+			vibeWallResult(),
+			vibeWallResult({ settled: [{ id: "worker", jobId: "job-7", status: "completed" }], stillRunning: [] }),
+			vibeWallResult(),
+		];
+		const messages = results.flatMap((result, index) => {
+			const id = `v${index + 1}`;
+			return [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id, name: "vibe_wait", arguments: {} }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					stopReason: "stop",
+					usage,
+					timestamp: Date.now(),
+				},
+				{
+					role: "toolResult",
+					toolCallId: id,
+					toolName: "vibe_wait",
+					...result,
+					isError: false,
+					timestamp: Date.now(),
+				},
+			] as unknown as AgentMessage[];
+		});
+
+		helpers.renderSessionContext({ messages } as SessionContext);
+
+		const walls = chatContainer.children.filter(
+			(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
+		);
+		const visible = walls.filter(wall => wall.render(120).length > 0);
+		expect(visible).toHaveLength(1);
+		expect(Bun.stripANSI(visible[0].render(120).join("\n"))).toContain("worker");
+		expect(visible[0].isTranscriptBlockFinalized()).toBe(true);
 	});
 });

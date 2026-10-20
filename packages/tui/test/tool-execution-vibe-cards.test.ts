@@ -31,13 +31,19 @@ function build(name: string, args: unknown) {
 
 function rowsFor(name: string, args: unknown, result: { details?: unknown; partial?: boolean }): number {
 	const component = build(name, args);
-	component.updateResult({ content: [{ type: "text", text: "frame" }], details: result.details }, result.partial ?? false);
+	component.updateResult(
+		{ content: [{ type: "text", text: "frame" }], details: result.details },
+		result.partial ?? false,
+	);
 	return component.render(120).length;
 }
 
 function nativeFor(name: string, args: unknown, result: { details?: unknown; partial?: boolean }) {
 	const component = build(name, args);
-	component.updateResult({ content: [{ type: "text", text: "frame" }], details: result.details }, result.partial ?? false);
+	component.updateResult(
+		{ content: [{ type: "text", text: "frame" }], details: result.details },
+		result.partial ?? false,
+	);
 	return component.describe(undefined as never);
 }
 

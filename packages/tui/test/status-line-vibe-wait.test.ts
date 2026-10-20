@@ -95,7 +95,9 @@ beforeAll(async () => {
 describe("vibe chip live wait facts", () => {
 	it("renders the in-flight poll on the mode segment", () => {
 		const ctx = { ...baseContext, vibeWait: { onAir: 2, settled: 1, elapsedMs: 12_400 } };
-		expect(segmentText(ctx)).toContain(`Vibe ${theme.sep.dot} 2 on air ${theme.sep.dot} 1 settled ${theme.sep.dot} 12s`);
+		expect(segmentText(ctx)).toContain(
+			`Vibe ${theme.sep.dot} 2 on air ${theme.sep.dot} 1 settled ${theme.sep.dot} 12s`,
+		);
 		expect(nativeSegmentText(ctx)).toBe("Vibe · 2 on air · 1 settled · 12s");
 	});
 

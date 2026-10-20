@@ -24,6 +24,18 @@ import type { NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResul
 /** Operation represented by a worker-session tool result. */
 export type VibeOp = "spawn" | "send" | "wait" | "kill" | "list";
 
+/**
+ * Vibe toolset name prefix. Vibe tools are a control plane, not transcript
+ * content: their calls and results reach the model unchanged, but the
+ * transcript draws no card for them — no worker TV walls, no spawn/send
+ * composer frames, no roster frames. `ToolExecutionComponent` keeps the
+ * component mounted (poll displacement, pending-tool bookkeeping) and only
+ * renders zero rows.
+ */
+export function isVibeToolName(name: string): boolean {
+	return name.startsWith("vibe_");
+}
+
 /** Details payload shared by every vibe tool for TUI rendering. */
 export interface VibeToolDetails {
 	op: VibeOp;

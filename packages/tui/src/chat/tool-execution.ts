@@ -20,6 +20,7 @@ import {
 	toolRenderers,
 } from "../tools/index";
 import { describeDefaultToolExecution, formatDefaultToolExecution } from "../tools/default-renderer";
+import { isVibeToolName } from "../tools/vibe";
 import { INTENT_FIELD, type TspCardStatus, type TspPreview, type TspText, type TspTone } from "@oh-my-pi/pi-wire";
 import { card, col, EMPTY_NODE, node, span, text, withHidden } from "../native/describe";
 import {
@@ -752,8 +753,11 @@ export class ToolExecutionComponent extends Container {
 			!isBackgroundAsyncRunning &&
 			(pendingCallConsumesSpinner || partialResultConsumesSpinner);
 		// TSP terminals clock spinners themselves; the frame counter is ANSI-only.
+		// Hidden vibe cards draw no rows, so the ticker would repaint nothing.
 		const needsSpinner =
-			!isNativeRendering() && (isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "wait");
+			!isVibeToolName(this.#toolName) &&
+			!isNativeRendering() &&
+			(isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "wait");
 		if (needsSpinner && !this.#spinnerActive) {
 			const frameCount = theme.spinnerFrames.length;
 			const frame = sharedSpinnerFrame(frameCount);
@@ -981,6 +985,9 @@ export class ToolExecutionComponent extends Container {
 	 * mounted so toggling it is one prop change.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
+		// Vibe tools never draw a card (wall, composer, roster): their calls and
+		// results stay in the model's context, the transcript shows no rows.
+		if (isVibeToolName(this.#toolName)) return EMPTY_NODE;
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
 		const media = cx?.supports("media") === true;
@@ -1337,6 +1344,9 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		// Vibe tools render nothing (see `isVibeToolName`); the component stays
+		// mounted so poll displacement and pending-tool bookkeeping still work.
+		if (isVibeToolName(this.#toolName)) return [];
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}

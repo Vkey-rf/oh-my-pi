@@ -289,6 +289,7 @@ import { LiveCommandController } from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
+import { VibeWaitLiveHost, type VibeWaitLiveUpdate } from "./controllers/vibe-wait-live";
 import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
@@ -1288,6 +1289,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusRowOccupied = false;
 	todoContainer: Container;
 	subagentContainer: Container;
+	/** In-flight `vibe_wait` wall; live chrome, never transcript history. */
+	vibeWaitContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	cleanseContainer: Container;
@@ -1826,6 +1829,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
+	/** Docked live wall for an in-flight `vibe_wait`; created on first publish. */
+	#vibeWaitLive: VibeWaitLiveHost | undefined;
 	#eventBus?: EventBus;
 	#subagentEventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
@@ -1971,6 +1976,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
 		this.subagentContainer = new AnchoredLiveContainer();
+		this.vibeWaitContainer = new AnchoredLiveContainer();
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
 		this.cleanseContainer = new AnchoredLiveContainer();
@@ -2299,6 +2305,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.pendingMessagesContainer,
 				this.todoContainer,
 				this.subagentContainer,
+				this.vibeWaitContainer,
 				this.btwContainer,
 				this.reportContainer,
 				this.omfgContainer,
@@ -2343,6 +2350,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				selfClearingChrome: [
 					this.todoContainer,
 					this.subagentContainer,
+					this.vibeWaitContainer,
 					this.modelCycleContainer,
 					this.progressHudContainer,
 				],
@@ -2351,6 +2359,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// inside the composer.
 				nativeDock: [
 					new HudPillsRow(this),
+					this.vibeWaitContainer,
 					this.btwContainer,
 					this.omfgContainer,
 					this.cleanseContainer,
@@ -4791,6 +4800,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #quiesceVibeForSessionSwitch(): Promise<void> {
+		// A live wall belongs to the session that owned the poll.
+		this.updateVibeWaitLive(undefined);
 		const ownerScope = this.#vibeModeOwnerScope;
 		if (!this.vibeModeEnabled || !ownerScope) return;
 		await VibeSessionRegistry.global().suspendScope(ownerScope, this.session.asyncJobManager);
@@ -7241,6 +7252,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
+		this.updateVibeWaitLive(undefined);
 		if (this.#ownsStartedUi) {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
@@ -8787,6 +8799,22 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	setHookStatus(key: string, text: string | undefined): void {
 		this.#extensionUiController.setHookStatus(key, text);
+	}
+
+	/**
+	 * Mirror an in-flight `vibe_wait` poll: the TV wall lives in the anchored
+	 * dock and repaints in place, so no poll frame ever reaches the transcript.
+	 * Before the dock is mounted (headless/pre-init) the status line's vibe chip
+	 * carries the same facts instead.
+	 */
+	updateVibeWaitLive(update: VibeWaitLiveUpdate | undefined): void {
+		this.#vibeWaitLive ??= new VibeWaitLiveHost(
+			this.vibeWaitContainer,
+			this.statusLine,
+			() => this.isInitialized,
+			() => this.ui.requestRender(),
+		);
+		this.#vibeWaitLive.publish(update);
 	}
 
 	showHookSelector(

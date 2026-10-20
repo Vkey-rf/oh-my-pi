@@ -232,6 +232,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 			markActivityEnd: vi.fn(),
 			setSession: vi.fn(),
 		},
+		updateVibeWaitLive: vi.fn(),
 		session,
 		get viewSession() {
 			return viewSession ?? this.session;

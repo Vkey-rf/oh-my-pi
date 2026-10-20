@@ -671,3 +671,41 @@ export function createVibeToolRenderer(op: VibeOp) {
 		},
 	} satisfies ToolRenderer<VibeRenderArgs, VibeToolDetails>;
 }
+
+// =============================================================================
+// Live host — the in-flight wall outside the transcript
+// =============================================================================
+
+/**
+ * One renderer for hosts that stream the wall frame by frame (the dock HUD that
+ * carries an in-flight `vibe_wait`). Transcript cards get theirs from
+ * {@link toolRenderers}; this instance is only for the live view.
+ */
+let liveWaitRenderer: ReturnType<typeof createVibeToolRenderer> | undefined;
+function liveWaitWall(): ReturnType<typeof createVibeToolRenderer> {
+	return (liveWaitRenderer ??= createVibeToolRenderer("wait"));
+}
+
+/**
+ * The wait TV wall as a plain component for a host outside the transcript.
+ * Rebuilt from each progress frame: the caller swaps/repaints it in place, so
+ * no poll ever enters scrollback.
+ */
+export function renderVibeWaitWall(details: VibeToolDetails, uiTheme: Theme, spinnerFrame: number): Component {
+	const renderResult = liveWaitWall().renderResult;
+	if (!renderResult) return new Text("", 0, 0);
+	return renderResult(
+		{ content: [], details },
+		{ expanded: false, isPartial: true, spinnerFrame },
+		uiTheme,
+		undefined,
+	);
+}
+
+/** Native twin of {@link renderVibeWaitWall}: the frameless wall as a dock node. */
+export function describeVibeWaitWall(details: VibeToolDetails): NativeNode {
+	const describeResult = liveWaitWall().describeResult;
+	const view = describeResult?.({ content: [], details }, { expanded: false, isPartial: true }, undefined);
+	if (!view) return node("col", { role: "omp.vibe.wall" });
+	return node("col", { role: "omp.vibe.wall" }, [...(view.head ? [text(view.head)] : []), ...(view.body ?? [])]);
+}

@@ -18,6 +18,7 @@ import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
+import type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	asyncJobState,
@@ -212,7 +213,9 @@ export class EventController {
 	 * updated in place from every progress frame (~500 ms) and cleared when the
 	 * call returns. Directories: `ToolExecutionComponent#hidesVibeCard`.
 	 */
-	#vibeWait: { toolCallId: string; startedAt: number; onAir: number; settled: number } | undefined;
+	#vibeWait:
+		| { toolCallId: string; startedAt: number; onAir: number; settled: number; details?: VibeToolDetails }
+		| undefined;
 	#detachToolApprovalPreviewWaiter: (() => void) | undefined;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
@@ -2053,12 +2056,12 @@ export class EventController {
 	#applyVibeWaitFrame(event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>): void {
 		const wait = this.#vibeWait;
 		if (!wait || wait.toolCallId !== event.toolCallId) return;
-		const details = event.partialResult.details as
-			| { screens?: Array<{ state?: string }>; wait?: { settled?: readonly unknown[] } }
-			| undefined;
-		const screens = details?.screens ?? [];
+		const details = event.partialResult.details as VibeToolDetails | undefined;
+		if (!details) return;
+		wait.details = details;
+		const screens = details.screens ?? [];
 		wait.onAir = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
-		wait.settled = details?.wait?.settled?.length ?? 0;
+		wait.settled = details.wait?.settled?.length ?? 0;
 		this.#publishVibeWait();
 	}
 
@@ -2067,13 +2070,16 @@ export class EventController {
 		if (!this.#vibeWait) return;
 		if (toolCallId !== undefined && this.#vibeWait.toolCallId !== toolCallId) return;
 		this.#vibeWait = undefined;
-		this.ctx.statusLine.setVibeWaitStatus(undefined);
+		this.ctx.updateVibeWaitLive(undefined);
 	}
 
 	#publishVibeWait(): void {
 		const wait = this.#vibeWait;
-		if (!wait) return;
-		this.ctx.statusLine.setVibeWaitStatus({
+		// The wall arrives with the first progress frame; `start` only arms the
+		// clock (there is nothing to paint before the snapshot exists).
+		if (!wait?.details) return;
+		this.ctx.updateVibeWaitLive({
+			details: wait.details,
 			onAir: wait.onAir,
 			settled: wait.settled,
 			elapsedMs: performance.now() - wait.startedAt,

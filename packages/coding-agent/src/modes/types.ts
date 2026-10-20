@@ -47,6 +47,7 @@ import type { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import type { HookSelectorComponent, HookSelectorOptions } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import type { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import type { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
+import type { VibeWaitLiveUpdate } from "./controllers/vibe-wait-live";
 import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import type { EventController } from "./controllers/event-controller";
@@ -637,6 +638,11 @@ export interface InteractiveModeContext {
 	): Promise<void>;
 	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 	setHookStatus(key: string, text: string | undefined): void;
+	/**
+	 * Mirror an in-flight `vibe_wait` poll into the docked live wall; the status
+	 * line carries it instead when the dock is not mounted. `undefined` clears.
+	 */
+	updateVibeWaitLive(update: VibeWaitLiveUpdate | undefined): void;
 	showHookSelector(
 		title: string,
 		options: ExtensionUISelectItem[],
